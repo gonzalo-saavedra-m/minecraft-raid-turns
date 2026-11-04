@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "raidturns.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"PokemonBattleMixin", "PlayerBattleActorMixin", "RaidChallengePacketMixin", "RaidBuilderMixin",
+		"RaidInstanceMixin", "RaidPokemonAccessor", "RaidDamageInstructionMixin", "RaidCrystalBlockMixin",
+		"RequestResponsePacketMixin"
+	],
+	"injectors": { "defaultRequire": 1 }
+}

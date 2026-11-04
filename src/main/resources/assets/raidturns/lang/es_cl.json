@@ -1,0 +1,8 @@
+{
+  "raidturns.countdown": "La raid parte en",
+  "raidturns.closed": "Esta raid ya partió. Espera a que termine para entrar.",
+  "raidturns.banned": "Huiste de esta raid. Puedes volver cuando termine.",
+  "raidturns.waiting.one": "Falta 1 jugador por elegir: %s s",
+  "raidturns.waiting.many": "Faltan %s jugadores por elegir: %s s",
+  "raidturns.seconds": "%s s"
+}

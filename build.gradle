@@ -1,0 +1,24 @@
+plugins {
+	id 'fabric-loom' version '1.18-SNAPSHOT'
+}
+
+version = "${mod_version}+${minecraft_version}"
+
+dependencies {
+	minecraft "com.mojang:minecraft:${minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+	// libs/ is gitignored: copy these jars from a Cobblemon 1.8.1 instance (see README)
+	modCompileOnly files('libs/Cobblemon-fabric-1.8.1+1.21.1.jar')
+	modCompileOnly files('libs/cobblemonraiddens-fabric-0.13.2+1.21.1.jar')
+	modCompileOnly files('libs/geckolib-fabric-1.21.1-4.9.3.jar')
+	compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:2.2.20'
+}
+
+processResources {
+	inputs.property 'version', project.version
+	filesMatching('fabric.mod.json') { expand version: project.version }
+}
+
+tasks.withType(JavaCompile).configureEach { it.options.release = 21 }

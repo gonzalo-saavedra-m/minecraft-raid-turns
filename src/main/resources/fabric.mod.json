@@ -1,0 +1,22 @@
+{
+	"schemaVersion": 1,
+	"id": "raidturns",
+	"version": "${version}",
+	"name": "Raid Turns",
+	"description": "Turn-based co-op for Cobblemon Raid Dens: the party starts together, everyone chooses, moves run one by one by speed and the boss hits the whole party on its turn.",
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["raidturns.RaidTurns"],
+		"client": ["raidturns.RaidTurnsClient"]
+	},
+	"mixins": ["raidturns.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.16",
+		"fabric-api": "*",
+		"minecraft": "1.21.1",
+		"cobblemon": "1.8.1+1.21.1",
+		"cobblemonraiddens": "0.13.2+1.21.1",
+		"java": ">=21"
+	}
+}
