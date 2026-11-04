@@ -3,6 +3,7 @@ package raidturns.mixin;
 import com.cobblemon.mod.common.api.battles.model.PokemonBattle;
 import com.necro.raid.dens.common.raids.RaidInstance;
 import com.necro.raid.dens.common.showdown.events.ShowdownEvent;
+import com.necro.raid.dens.common.showdown.events.ShowdownEvents;
 import net.minecraft.server.level.ServerPlayer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -23,11 +24,14 @@ public abstract class RaidInstanceMixin {
 		if (raidturns$round() != null) cir.setReturnValue(true);
 	}
 
-	/** In the boss's turn every copy already runs the move: copying its effects would apply them once per player. */
+	/**
+	 * In the boss's turn every copy already runs the move: copying a boost would apply it once per player. A status is
+	 * still copied, since setting it twice changes nothing and it may come from one copy only (Static on contact).
+	 */
 	@Inject(method = "lambda$updateBattleState$25", at = @At("HEAD"), cancellable = true)
 	private void raidturns$noStateCopy(PokemonBattle battle, ShowdownEvent event, CallbackInfo ci) {
 		RaidRound round = raidturns$round();
-		if (round != null && round.isBossPhase()) ci.cancel();
+		if (round != null && round.isBossPhase() && !(event instanceof ShowdownEvents.SetStatusShowdownEvent) && !(event instanceof ShowdownEvents.CureStatusShowdownEvent)) ci.cancel();
 	}
 
 	@Inject(method = "broadcastToOthers", at = @At("HEAD"), cancellable = true)

@@ -40,9 +40,10 @@ endraid() { for p in "$@"; do c "player $p kill" 0.5; done; sleep 3; }
 expected_blocked() { ask "raidturns enter $1 $X 200 4" "enter $1"; }
 
 echo "--- 1, 2, 3: start together, one Pokémon, wait for everyone"
-raid cobblemonraiddens:cubone rtA:pikachu\ level=100 rtB:snorlax\ level=100 rtC:eevee\ level=100
+raid cobblemonraiddens:cubone rtA:jolteon\ level=100 rtB:snorlax\ level=100 rtC:eevee\ level=100
 c "mrtest add rtA squirtle level=50"
-c "player rtD kill" 0.3; c "player rtD spawn at $((X + 8)) 200 0" 3; c "mrtest give rtD eevee level=50"
+c "player rtD kill" 0.3; c "player rtD spawn at $((X + 8)) 200 0" 2
+i=0; until ask "mrtest give rtD eevee level=50" "give rtD" | grep -q equipo || [ $i -ge 30 ]; do sleep 1; i=$((i + 1)); done
 c "raidturns r rtB"
 check "countdown running" "$(state)" "COUNTDOWN"
 check "closed during countdown" "$(expected_blocked rtD)" "blocked raidturns.closed"
@@ -65,7 +66,6 @@ wait_state "CHOOSING" 20
 check "next round opens the menus again" "$(state)" "menus=7 "
 s=$(state)
 check "the boss bar gets the raid's health" "$s" "healthSent=[1-9]"
-check "the copy's full health is hidden" "$s" "healthHidden=[1-9]"
 check "same boss move in all copies" "$(log rtA)" "\|move\|p2a"
 a=$(log rtA | grep -Eo '\|move\|p2a: #\|[^|]+' | head -1); b=$(log rtB | grep -Eo '\|move\|p2a: #\|[^|]+' | head -1)
 [ -n "$a" ] && [ "$a" = "$b" ] && echo "PASS boss used $a in both" || echo "FAIL boss moves differ: $a / $b"
@@ -85,14 +85,16 @@ wait_state "turn=5.*turn=5.*turn=5" 40
 n=$(log rtA | grep -o 'from. brn' | wc -l | tr -d ' ')
 [ "$n" -le 2 ] && [ "$n" -ge 1 ] && echo "PASS burn once per round ($n lines: absolute and percent)" || echo "FAIL burn lines $n"
 wait_state "CHOOSING" 20
-c "raidturns eval rtA battle.sides[1].active[0].setStatus('slp')" 2
-for p in rtA rtB rtC; do c "raidturns eval $p battle.sides[1].active[0].status + '=' + battle.sides[1].active[0].statusState.time" 1; done
+c "raidturns eval rtA const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('spore'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 20, maxpp: 20, target: m.target, disabled: false, used: false}" 1
 c "mrtest act rtA default"; c "mrtest act rtB default"; c "mrtest act rtC default"
-wait_state "turn=7.*turn=7.*turn=7" 40
+# The default move is now Spore, and the boss sleeps at least 2 rounds
+wait_state "turn=7.*turn=7.*turn=7" 40; wait_state "CHOOSING" 20
 for p in rtA rtB rtC; do c "raidturns eval $p battle.sides[1].active[0].status + '=' + battle.sides[1].active[0].statusState.time" 1; done
-ta=$(log rtA | grep -Eo '<<< .?[a-z]*=[0-9]+' | tail -1); tb=$(log rtB | grep -Eo '<<< .?[a-z]*=[0-9]+' | tail -1); tc=$(log rtC | grep -Eo '<<< .?[a-z]*=[0-9]+' | tail -1)
+ta=$(log rtA | grep -Eo '<<< .?slp=[0-9]+' | tail -1); tb=$(log rtB | grep -Eo '<<< .?slp=[0-9]+' | tail -1); tc=$(log rtC | grep -Eo '<<< .?slp=[0-9]+' | tail -1)
 [ -n "$ta" ] && [ "$ta" = "$tb" ] && [ "$tb" = "$tc" ] && echo "PASS same sleep counter in all copies: $ta" || echo "FAIL sleep counters: $ta / $tb / $tc"
-check "boss asleep does not move while held" "$(log rtA)" "\|cant\|p2a.*slp|\|cant\|p2a"
+check "the boss sleeps in every copy" "$(log rtB)" "\|cant\|p2a: #\|slp"
+
+check "the copy's full health is hidden" "$(state)" "healthHidden=[1-9]"
 
 echo "--- 3b: timeout uses the default move"
 wait_state "CHOOSING" 10; c "mrtest act rtA default"; c "mrtest act rtB default"
@@ -104,8 +106,10 @@ check "timeout resolved the round" "$(state)" "STEP|READING_SPEED|WAITING_TURN|t
 echo "--- 4: no PP uses Struggle"
 wait_state "CHOOSING" 40
 c "raidturns eval rtB for (const m of battle.sides[0].active[0].moveSlots) m.pp = 0" 1
-c "mrtest act rtA default"; c "mrtest act rtB default"; c "mrtest act rtC default"; sleep 1
-wait_state "CHOOSING" 40
+for round in 1 2; do
+  c "mrtest act rtA default"; c "mrtest act rtB default"; c "mrtest act rtC default"; sleep 2
+  wait_state "CHOOSING" 40
+done
 check "Struggle without PP" "$(log rtB)" "Struggle"
 
 echo "--- 10: fleeing with company"
@@ -147,7 +151,8 @@ raid cobblemonraiddens:cubone rtF:eevee\ level=100
 c "raidturns r rtF"; wait_state "CHOOSING" 12
 c "mrtest act rtF forfeit" 5
 check "out of the dimension" "$(ask 'raidturns inraid rtF' 'inraid rtF')" "dim=false"
-check "can enter again" "$(ask "raidturns enter rtF $X 200 4" 'enter rtF')" "enter rtF host|enter rtf host"
+sleep 3
+check "can enter again" "$(ask "raidturns enter rtF $X 200 4" '[raidturns] enter')" "enter rtF host"
 endraid rtF
 
 echo "--- 9: disconnecting mid round"
@@ -173,11 +178,14 @@ c "mrtest act rtL default"; c "mrtest act rtM default"
 wait_state "turn=3.*turn=3" 30; wait_state "CHOOSING" 20
 c "raidturns bossmove swordsdance"
 for p in rtL rtM; do c "raidturns eval $p 'atk=' + battle.sides[1].active[0].boosts.atk" 1; done
-c "mrtest act rtL default"; c "mrtest act rtM default"
-wait_state "turn=5.*turn=5" 30; wait_state "CHOOSING" 20
+before=$(log rtL | grep -Eo 'atk=[0-9]+' | tail -1 | cut -d= -f2)
+c "mrtest act rtL default"; c "mrtest act rtM default"; sleep 2
+wait_state "CHOOSING" 40
 for p in rtL rtM; do c "raidturns eval $p 'atk=' + battle.sides[1].active[0].boosts.atk" 1; done
-check "boost +2 in one copy" "$(log rtL | grep -Eo 'atk=[0-9]+' | tail -1)" "atk=2"
-check "boost +2 in the other" "$(log rtM | grep -Eo 'atk=[0-9]+' | tail -1)" "atk=2"
+for p in rtL rtM; do
+  after=$(log $p | grep -Eo 'atk=[0-9]+' | tail -1 | cut -d= -f2)
+  [ "$after" = "$((before + 2))" ] && echo "PASS boost +2 once in $p" || echo "FAIL boost in $p: $before -> $after"
+done
 endraid rtL rtM
 
 echo "--- 12: alone"
