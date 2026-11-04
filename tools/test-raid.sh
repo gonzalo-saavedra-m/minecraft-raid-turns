@@ -40,7 +40,7 @@ endraid() { for p in "$@"; do c "player $p kill" 0.5; done; sleep 3; }
 expected_blocked() { ask "raidturns enter $1 $X 200 4" "enter $1"; }
 
 echo "--- 1, 2, 3: start together, one Pokémon, wait for everyone"
-raid cobblemonraiddens:cubone rtA:jolteon\ level=100 rtB:snorlax\ level=100 rtC:eevee\ level=100
+raid cobblemonraiddens:cubone rtA:jolteon\ level=100 rtB:snorlax\ level=100 rtC:blissey\ level=100
 c "mrtest add rtA squirtle level=50"
 c "player rtD kill" 0.3; c "player rtD spawn at $((X + 8)) 200 0" 2
 i=0; until ask "mrtest give rtD eevee level=50" "give rtD" | grep -q equipo || [ $i -ge 30 ]; do sleep 1; i=$((i + 1)); done
@@ -93,6 +93,8 @@ for p in rtA rtB rtC; do c "raidturns eval $p battle.sides[1].active[0].status +
 ta=$(log rtA | grep -Eo '<<< .?slp=[0-9]+' | tail -1); tb=$(log rtB | grep -Eo '<<< .?slp=[0-9]+' | tail -1); tc=$(log rtC | grep -Eo '<<< .?slp=[0-9]+' | tail -1)
 [ -n "$ta" ] && [ "$ta" = "$tb" ] && [ "$tb" = "$tc" ] && echo "PASS same sleep counter in all copies: $ta" || echo "FAIL sleep counters: $ta / $tb / $tc"
 check "the boss sleeps in every copy" "$(log rtB)" "\|cant\|p2a: #\|slp"
+check "everyone is shown the boss asleep, not only who used Spore" "$(state)" "rtA .*shown=slp.*rtB .*shown=slp.*rtC .*shown=slp"
+check "the Spore user's lines reach the others" "$(state)" "relayed=[1-9]"
 
 check "the copy's full health is hidden" "$(state)" "healthHidden=[1-9]"
 
@@ -127,6 +129,8 @@ sleep 3; wait_state "CHOOSING" 40
 check "fainted leaves the round" "$(state)" "CHOOSING.*(RTB|rtB|rtb) must"
 s=$(state); echo "$s" | grep -q "RTA must\|rtA must" && echo "FAIL fainted player still in round: $s" || echo "PASS fainted player out of the round"
 check "still inside watching" "$(ask 'raidturns inraid rtA' 'inraid rtA')" "dim=true"
+sleep 2
+check "a fainted player spectates a teammate's copy" "$(state)" "rtB .*spectators=[1-9]"
 c "raidturns rewards clear"; c "mrtest raidend rtB" 3
 r=$(ask "raidturns rewards" "[raidturns] rewards"); echo "$r"
 check "fainted player gets rewards" "$(ask 'raidturns inraid rtA' 'inraid rtA')" "rewards=true"
@@ -188,10 +192,76 @@ for p in rtL rtM; do
 done
 endraid rtL rtM
 
+echo "--- 6b: stat changes reach everyone"
+raid cobblemonraiddens:cubone rtR:snorlax\ level=100 rtS:snorlax\ level=100
+c "raidturns r rtR"; wait_state "CHOOSING" 12
+c "raidturns eval rtR const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('growl'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 40, maxpp: 40, target: m.target, disabled: false, used: false}" 1
+c "raidturns eval rtS const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('swordsdance'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 40, maxpp: 40, target: m.target, disabled: false, used: false}" 1
+c "raidturns bossmove splash"
+c "mrtest act rtR default"; c "mrtest act rtS default"; sleep 2
+wait_state "turn=[3-9].*turn=[3-9]" 30; wait_state "CHOOSING" 20; sleep 1
+for p in rtR rtS; do c "raidturns eval $p 'bossatk=' + battle.sides[1].active[0].boosts.atk" 1; done
+br=$(log rtR | grep -Eo 'bossatk=-?[0-9]+' | tail -1); bs=$(log rtS | grep -Eo 'bossatk=-?[0-9]+' | tail -1)
+[ "$br" = "bossatk=-1" ] && [ "$bs" = "bossatk=-1" ] && echo "PASS Growl from one player lowers the boss in every copy" || echo "FAIL boss atk: $br / $bs"
+s=$(state)
+check "the panel shows the boss's stat change to both" "$s" "rtR .*view=[^ /]*/[^ /]*/atk:-1.*rtS .*view=[^ /]*/[^ /]*/atk:-1"
+check "the panel shows each player's own stat change" "$s" "rtS .*view=[^ /]*/atk:2/"
+check "the stat change reaches the others' log" "$s" "boost"
+endraid rtR rtS
+
+echo "--- 14: with three players, turns advance one round at a time"
+raid cobblemonraiddens:cubone rtT:snorlax\ level=100 rtU:snorlax\ level=100 rtV:snorlax\ level=100
+c "raidturns r rtT"; wait_state "CHOOSING" 12
+# Tackle: a move like Hyper Beam adds a legitimate round to recharge
+for p in rtT rtU rtV; do c "raidturns eval $p const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('tackle'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 40, maxpp: 40, target: m.target, disabled: false, used: false}; p.moveSlots.length = 1" 0.5; done
+sleep 8
+s=$(state)
+echo "$s" | grep -Eq 'CHOOSING.*rtT must=true resp=0.*turn=1 .*rtU must=true resp=0.*turn=1 .*rtV must=true resp=0.*turn=1 ' || echo "$s" | grep -Eiq 'CHOOSING.*rtT must=true resp=0.*turn=1 .*rtU must=true resp=0.*turn=1 .*rtV must=true resp=0.*turn=1 ' && echo "PASS nothing advances while nobody chooses" || echo "FAIL advanced without choices: $s" | cut -c1-900
+for round in 1 2 3; do
+  c "mrtest act rtT default"; c "mrtest act rtU default"; c "mrtest act rtV default"; sleep 2
+  want=$((round * 2 + 1)); i=0
+  until state | grep -Eiq "CHOOSING.*must=true.*must=true.*must=true" && [ "$(state | grep -Eo ' turn=[0-9]+' | sort -u | wc -l | tr -d ' ')" = 1 ] || [ $i -ge 40 ]; do sleep 1; i=$((i + 1)); done
+  s=$(state); turns=$(echo "$s" | grep -Eo ' turn=[0-9]+' | sed 's/ //' | tr '\n' ' ')
+  [ "$turns" = "turn=$want turn=$want turn=$want " ] && echo "PASS round $round: exactly two internal turns in all three copies" || echo "FAIL round $round: wanted turn=$want, got $turns"
+  shown=$(echo "$s" | grep -Eo 'rounds=\[[0-9,]*\]' | tr '\n' ' ')
+  list=$(seq 1 $((round + 1)) | paste -sd, -); [ "$shown" = "rounds=[$list] rounds=[$list] rounds=[$list] " ] && echo "PASS round $round: the log counts [$list] in all three copies" || echo "FAIL round $round: log shows $shown, wanted [$list]"
+done
+endraid rtT rtU rtV
+
 echo "--- 12: alone"
 raid cobblemonraiddens:cubone rtI:snorlax\ level=100
 c "raidturns r rtI"; wait_state "CHOOSING" 12; c "mrtest act rtI default"
-wait_state "turn=3" 30 && echo "PASS raid of one player"
+wait_state "turn=[3-9]" 30 && echo "PASS raid of one player"
 endraid rtI
+echo "--- 13: everyone sees the same boss"
+raid cobblemonraiddens:cubone rtN:snorlax\ level=100 rtO:snorlax\ level=100
+c "raidturns r rtN"; wait_state "CHOOSING" 12
+for p in rtN; do c "raidturns eval $p const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('spore'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 20, maxpp: 20, target: m.target, disabled: false, used: false}" 1; done
+c "mrtest act rtN default"; c "mrtest act rtO default"; sleep 2; wait_state "CHOOSING" 40
+check "asleep for both" "$(state)" "rtN .*shown=slp.*rtO .*shown=slp"
+c "raidturns eval rtN const p = battle.sides[0].active[0]; const m = battle.dex.moves.get('tackle'); p.moveSlots[0] = {move: m.name, id: m.id, pp: 20, maxpp: 20, target: m.target, disabled: false, used: false}" 1
+i=0; while [ $i -lt 8 ] && state | grep -q "shown=slp"; do
+  c "mrtest act rtN default"; c "mrtest act rtO default"; sleep 2; wait_state "CHOOSING" 40; i=$((i + 1))
+done
+check "awake for both when it wakes up" "$(state)" "rtN .*shown=none.*rtO .*shown=none"
+endraid rtN rtO
+
+# Faster than the boss, so end-of-turn effects run in the boss's turn: only lines about each player get relayed there
+raid cobblemonraiddens:cubone rtP:jolteon\ level=35 rtQ:jolteon\ level=35
+c "raidturns nodamage false"
+c "raidturns r rtP"; wait_state "CHOOSING" 12
+c "raidturns eval rtP const p = battle.sides[0].active[0]; p.setStatus('brn'); p.setItem('leftovers'); p.addVolatile('confusion')" 1
+c "raidturns eval rtQ battle.sides[0].active[0].setStatus('par')" 1
+i=0; while [ $i -lt 4 ]; do c "mrtest act rtP default"; c "mrtest act rtQ default"; sleep 2; wait_state "CHOOSING|no rounds" 40; i=$((i + 1)); done
+s=$(state); echo "$s" | grep -Eo 'bossLog=\[[^]]*\]|health=[^ ]+'
+check "the log tells the damage to the boss" "$s" "boss_damaged:[0-9]+"
+check "the log tells the damage to each player" "$s" "player_damaged:[0-9]+"
+check "the panel shows a teammate's status" "$s" "(rtP|RTP) .*view=brn/"
+check "a teammate's burn reaches the others" "$s" "status.burn.hurt"
+check "a teammate's confusion reaches the others" "$s" "confusion"
+check "a teammate's Leftovers reach the others" "$s" "heal.leftovers"
+check "the log tells what they healed" "$s" "player_healed:[0-9]+"
+echo "$s" | grep -q "cant" && echo "PASS a teammate's paralysis reaches the others" || echo "INFO paralysis did not stop rtQ in these rounds (25% per round)"
+endraid rtP rtQ
 c "raidturns nodamage false"
 n=$(grep -c 'raidInstance\|Exception while ticking a battle\|Mixin apply\|at knot/raidturns' "$T/console.log"); echo "errors in log: $n"

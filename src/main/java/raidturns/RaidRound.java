@@ -14,9 +14,11 @@ import com.cobblemon.mod.common.battles.ShowdownActionResponse;
 import com.cobblemon.mod.common.battles.actor.PlayerBattleActor;
 import com.cobblemon.mod.common.entity.pokemon.PokemonEntity;
 import com.cobblemon.mod.common.net.messages.client.battle.BattleMakeChoicePacket;
+import com.cobblemon.mod.common.net.messages.client.battle.BattlePersistentStatusPacket;
 import com.cobblemon.mod.common.net.messages.client.battle.BattleQueueRequestPacket;
 import com.cobblemon.mod.common.pokemon.Pokemon;
 import com.cobblemon.mod.common.pokemon.RenderablePokemon;
+import com.cobblemon.mod.common.pokemon.status.PersistentStatus;
 import com.cobblemon.mod.common.util.PlayerExtensionsKt;
 import com.necro.raid.dens.common.network.packets.RaidChallengePacket;
 import com.necro.raid.dens.common.raids.RaidInstance;
@@ -28,6 +30,7 @@ import com.necro.raid.dens.common.util.IRaidTeleporter;
 import com.necro.raid.dens.common.util.RaidUtils;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
@@ -59,7 +62,7 @@ public final class RaidRound {
 	public static boolean starting;
 
 	public enum Phase { COUNTDOWN, WAITING_TURN, CHOOSING, READING_SPEED, STEP }
-	public enum Status { WAITING, READY, ACTING, FAINTED }
+	public enum Status { WAITING, READY, ACTING, FAINTED, BOSS }
 
 	/** One slot of the round: a player or, with battle null, the boss against everyone. */
 	private record Step(PokemonBattle battle, int priority, int speed) {}
@@ -72,17 +75,29 @@ public final class RaidRound {
 	private final Set<UUID> banned = new HashSet<>();
 	private final Set<UUID> leaving = new HashSet<>();
 	private final Map<UUID, RenderablePokemon> pokemon = new HashMap<>();
+	private final Map<UUID, Pokemon> leads = new HashMap<>();
+	/** What each copy's Showdown last reported through |rtview|: player's status, player's boosts, boss's boosts. */
+	private final Map<PokemonBattle, String[]> views = new HashMap<>();
 	private final Map<UUID, String> names = new HashMap<>();
 	private final Map<PokemonBattle, List<ShowdownActionResponse>> choices = new HashMap<>();
 	private final Map<PokemonBattle, Integer> turnsDone = new HashMap<>();
 	private final Map<PokemonBattle, int[]> speeds = new ConcurrentHashMap<>();
 	private final Set<PokemonBattle> stepWaiting = new HashSet<>();
 	private final List<Step> steps = new ArrayList<>();
+	/** Last health Cobblemon reported for each copy's player, to tell each change apart. */
+	private final Map<PokemonBattle, Float> lastHealth = new HashMap<>();
+	private final Map<PokemonBattle, String> statusShown = new HashMap<>();
+	private final List<String> recentLog = new ArrayList<>();
+	/** Round numbers each copy's log has shown, for /raidturns state. */
+	private final Map<PokemonBattle, List<Integer>> roundsShown = new HashMap<>();
+	/** The copy each player without a battle is watching, and who closed that view with Esc. */
+	private final Map<UUID, PokemonBattle> watching = new HashMap<>();
+	private final Set<UUID> stoppedWatching = new HashSet<>();
 
 	private Phase phase = Phase.COUNTDOWN;
 	private int ticks;
-	private boolean started, bossSlept, bossPhase, allowDispatch, sendingMenu, showingBossHealth;
-	private int menusSent, bossHealthHidden, bossHealthSent;
+	private boolean started, bossSlept, bossPhase, allowDispatch, sendingMenu, showingBossHealth, saying;
+	private int menusSent, bossHealthHidden, bossHealthSent, linesRelayed;
 	private PokemonBattle actingBattle, bossPhaseFirst;
 	private ShowdownActionResponse bossMove;
 	private String lastState = "", lastOrder = "";
@@ -181,6 +196,7 @@ public final class RaidRound {
 				if (lead == null) continue;
 				new RaidChallengePacket(bossEntityId, lead.getUuid(), format).handleServer(player);
 				pokemon.put(player.getUUID(), lead.asRenderablePokemon());
+				leads.put(player.getUUID(), lead);
 				names.put(player.getUUID(), player.getScoreboardName());
 			}
 		} finally {
@@ -219,8 +235,9 @@ public final class RaidRound {
 		turnsDone.clear();
 		speeds.clear();
 		begin(Phase.CHOOSING);
+		publishBoss();
 		for (PokemonBattle battle : live) {
-			((raidturns.mixin.RaidInstanceAccessor) raid).raidturns$sendHealth(battle);
+			lastHealth.putIfAbsent(battle, (float) lead(battle).getEffectedPokemon().getCurrentHealth());
 			if (player(battle).getResponses().isEmpty()) sendMenu(battle);
 		}
 	}
@@ -228,6 +245,8 @@ public final class RaidRound {
 	private void tickChoosing() {
 		List<PokemonBattle> live = live();
 		if (live.isEmpty()) return;
+		// A fainted player's copy ends after the round's last step, so this can't wait for the next one
+		if (ticks % 20 == 1 && watchFainted()) publishBoss();
 		boolean timedOut = ticks >= CHOOSE_TICKS;
 		boolean ready = true;
 		for (PokemonBattle battle : live) {
@@ -282,6 +301,7 @@ public final class RaidRound {
 		bossPhase = false;
 		actingBattle = null;
 		bossPhaseFirst = null;
+		publishBoss();
 		// Steps whose player left, fainted or fled are skipped
 		while (!steps.isEmpty()) {
 			Step step = steps.removeFirst();
@@ -301,6 +321,129 @@ public final class RaidRound {
 			return;
 		}
 		begin(Phase.WAITING_TURN);
+	}
+
+	/**
+	 * A player whose copy ended keeps watching a teammate's copy, which gets the shared log and the boss's real state.
+	 * Returns true if someone started watching: what Cobblemon sends them first is the copy's own view of the boss.
+	 */
+	private boolean watchFainted() {
+		List<PokemonBattle> live = live();
+		if (live.isEmpty() || !(player(live.getFirst()) instanceof PlayerBattleActor target)) return false;
+		ServerPlayer targetPlayer = PlayerExtensionsKt.getPlayer(target.getUuid());
+		if (targetPlayer == null) return false;
+		boolean started = false;
+		for (UUID id : names.keySet()) {
+			ServerPlayer player = PlayerExtensionsKt.getPlayer(id);
+			if (player == null || stoppedWatching.contains(id) || !RaidUtils.isRaidDimension(player.level()) || com.cobblemon.mod.common.battles.BattleRegistry.getBattleByParticipatingPlayer(player) != null) continue;
+			PokemonBattle watched = watching.get(id);
+			if (watched != null && live.contains(watched)) {
+				if (!watched.getSpectators().contains(id)) stoppedWatching.add(id);
+				continue;
+			}
+			com.cobblemon.mod.common.net.serverhandling.battle.SpectateBattleHandler.INSTANCE.spectateBattle(targetPlayer, player);
+			watching.put(id, live.getFirst());
+			started = true;
+		}
+		return started;
+	}
+
+	/** Called from the rtview instruction, on the Showdown side of the dispatch. */
+	static void onView(PokemonBattle battle, String ailment, String boosts, String bossBoosts) {
+		RaidRound round = of(battle);
+		if (round != null) round.views.put(battle, new String[]{ailment, boosts, bossBoosts});
+	}
+
+	/** Mixin on syncHealth: a positive amount is damage. Runs per event, so a burn does not get mixed with the hit before it. */
+	public void onBossHealth(PokemonBattle battle, float amount) {
+		publishBossHealth();
+		if (amount == 0) return;
+		say(amount > 0 ? "raidturns.log.boss_damaged" : "raidturns.log.boss_healed", boss(battle).getPokemonList().getFirst().getName(), percent(Math.abs(amount), raid.getMaxHealth()));
+	}
+
+	/** Mixin on PlayerBattleActor.sendUpdate: the health Cobblemon just reported for this copy's player. */
+	public void onPlayerHealth(PokemonBattle battle, float health) {
+		Float last = lastHealth.put(battle, health);
+		if (last == null || last == health) return;
+		Pokemon pokemon = lead(battle).getEffectedPokemon();
+		say(health < last ? "raidturns.log.player_damaged" : "raidturns.log.player_healed", lead(battle).getName(), owner(battle), percent(Math.abs(last - health), pokemon.getMaxHealth()));
+	}
+
+	private void say(String key, Object... args) {
+		Component line = Component.translatable(key, args);
+		saying = true;
+		for (PokemonBattle battle : live()) battle.broadcastChatMessage(line);
+		saying = false;
+		remember(key.substring(key.lastIndexOf('.') + 1) + ":" + args[args.length - 1]);
+	}
+
+	/** Mixin on broadcastChatMessage: the log just showed this round number. */
+	public void onRoundShown(PokemonBattle battle, int number) {
+		roundsShown.computeIfAbsent(battle, ignored -> new ArrayList<>()).add(number);
+	}
+
+	private void remember(String line) {
+		if (recentLog.size() >= 30) recentLog.removeFirst();
+		recentLog.add(line);
+	}
+
+	private static int percent(float lost, float max) {
+		return Math.max(1, Math.round(lost * 100 / max));
+	}
+
+	private static com.cobblemon.mod.common.battles.pokemon.BattlePokemon lead(PokemonBattle battle) {
+		return player(battle).getPokemonList().getFirst();
+	}
+
+	private String owner(PokemonBattle battle) {
+		return player(battle) instanceof PlayerBattleActor actor ? names.getOrDefault(actor.getUuid(), "") : "";
+	}
+
+	/**
+	 * Mixin on broadcastChatMessage: what one copy logs, the others never ran. That is everything in its player's turn. In
+	 * the boss's turn all copies run the same move, so only lines about its own player: burn, Leftovers, fainting.
+	 */
+	public void relayLog(PokemonBattle battle, Component message) {
+		if (saying || battle != actingBattle && !(bossPhase && isAboutPlayer(battle, message))) return;
+		Component line = Component.literal(owner(battle) + ": ").append(message);
+		for (PokemonBattle other : live()) {
+			if (other == battle) continue;
+			other.broadcastChatMessage(line);
+			linesRelayed++;
+		}
+		if (message.getContents() instanceof TranslatableContents contents) remember(contents.getKey());
+	}
+
+	/** shortcut: compares names, so a player with the boss's species is not relayed in the boss's turn; good enough for a log line. */
+	private static boolean isAboutPlayer(PokemonBattle battle, Component message) {
+		if (!(message.getContents() instanceof TranslatableContents contents)) return false;
+		String own = lead(battle).getName().getString(), bossName = boss(battle).getPokemonList().getFirst().getName().getString();
+		boolean about = false;
+		for (Object arg : contents.getArgs()) {
+			if (!(arg instanceof Component name)) continue;
+			if (name.getString().equals(bossName)) return false;
+			about |= name.getString().equals(own);
+		}
+		return about;
+	}
+
+	/** The copies only calculate: what clients show of the boss always comes from the raid, the one place that has it right. */
+	private void publishBoss() {
+		publishBossHealth();
+		PersistentStatus status = bossStatus() instanceof PersistentStatus persistent ? persistent : null;
+		for (PokemonBattle battle : live()) {
+			battle.sendUpdate(new BattlePersistentStatusPacket(boss(battle).getActivePokemon().getFirst().getPNX(), status));
+			statusShown.put(battle, status == null ? "none" : status.getShowdownName());
+			battle.writeShowdownAction(">eval { const f = p => Object.entries(p.boosts).filter(e => e[1]).map(e => e[0] + ':' + e[1]).join(',') || '-'; const a = battle.sides[0].active[0], b = battle.sides[1].active[0]; if (a && b) battle.add('rtview', a.status || '-', f(a), f(b)); }");
+		}
+	}
+
+	private void publishBossHealth() {
+		for (PokemonBattle battle : live()) ((raidturns.mixin.RaidInstanceAccessor) raid).raidturns$sendHealth(battle);
+	}
+
+	private com.cobblemon.mod.common.api.pokemon.status.Status bossStatus() {
+		return ((raidturns.mixin.RaidPokemonAccessor) raid.getBattleState().bossSide.pokemon).raidturns$status();
 	}
 
 	/** Plays one Showdown turn of a copy: the player's choice and the boss held, or the boss's move and the player held. */
@@ -360,7 +503,7 @@ public final class RaidRound {
 
 	/** Every copy rolled its own sleep counter: overwrites them with a single one, so the boss wakes up in all at once. */
 	private void syncSleep() {
-		var status = ((raidturns.mixin.RaidPokemonAccessor) raid.getBattleState().bossSide.pokemon).raidturns$status();
+		var status = bossStatus();
 		boolean asleep = status != null && "slp".equals(status.getName().getPath()) || status != null && "sleep".equals(status.getName().getPath());
 		if (asleep && !bossSlept) {
 			int time = 2 + new java.util.Random().nextInt(4);
@@ -397,6 +540,7 @@ public final class RaidRound {
 			}
 			banned.add(id);
 			pokemon.remove(id);
+			leads.remove(id);
 			names.remove(id);
 			raid.getPlayers().remove(player);
 			raid.removeFromBossEvent(player);
@@ -470,11 +614,21 @@ public final class RaidRound {
 			Status status = battle == null ? Status.FAINTED
 					: battle == actingBattle ? Status.ACTING
 					: phase == Phase.CHOOSING && player(battle).getResponses().isEmpty() ? Status.WAITING : Status.READY;
-			members.add(new GroupStatePayload.Member(entry.getKey(), entry.getValue(), pokemon.get(entry.getKey()), status.ordinal()));
+			Pokemon lead = leads.get(entry.getKey());
+			String[] view = battle == null ? null : views.get(battle);
+			members.add(new GroupStatePayload.Member(entry.getKey(), entry.getValue(), pokemon.get(entry.getKey()), status.ordinal(),
+					lead == null || lead.getMaxHealth() == 0 ? 0 : (float) lead.getCurrentHealth() / lead.getMaxHealth(),
+					view == null ? "-" : view[0], view == null ? "-" : view[1]));
+		}
+		if (!members.isEmpty()) {
+			String[] bossView = live().stream().map(views::get).filter(java.util.Objects::nonNull).findFirst().orElse(null);
+			var ailment = bossStatus();
+			members.addFirst(new GroupStatePayload.Member(raid.getBossEntity().getUUID(), "", raid.getBossEntity().getPokemon().asRenderablePokemon(), Status.BOSS.ordinal(),
+					raid.getCurrentHealth() / raid.getMaxHealth(), ailment == null ? "-" : ailment.getShowdownName(), bossView == null ? "-" : bossView[2]));
 		}
 		int seconds = phase == Phase.CHOOSING ? Math.max(0, (CHOOSE_TICKS - ticks + 19) / 20) : 0;
 		StringBuilder key = new StringBuilder().append(phaseId);
-		for (var member : members) key.append(member.id()).append(member.status());
+		for (var member : members) key.append(member.id()).append(member.status()).append(Math.round(member.health() * 100)).append(member.ailment()).append(member.boosts());
 		boolean changed = !key.toString().equals(lastState);
 		boolean secondTick = phase == Phase.CHOOSING && ticks % 20 == 0;
 		if (!changed && !secondTick) return;
@@ -518,12 +672,12 @@ public final class RaidRound {
 
 	/** State of the round for /raidturns state. */
 	String describe() {
-		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " menus=" + menusSent + " healthSent=" + bossHealthSent + " healthHidden=" + bossHealthHidden + " order=" + lastOrder + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
+		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " menus=" + menusSent + " healthSent=" + bossHealthSent + " healthHidden=" + bossHealthHidden + " relayed=" + linesRelayed + " bossLog=" + recentLog + " health=" + raid.getCurrentHealth() + "/" + raid.getMaxHealth() + " order=" + lastOrder + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
 		for (PokemonBattle battle : live()) {
 			BattleActor actor = player(battle);
 			out.append(" | ").append(actor.getName().getString()).append(" must=").append(actor.getMustChoose())
 					.append(" resp=").append(actor.getResponses().size())
-					.append(" team=").append(actor.getPokemonList().size()).append(" turn=").append(battle.getTurn());
+					.append(" team=").append(actor.getPokemonList().size()).append(" turn=").append(battle.getTurn()).append(" shown=").append(statusShown.get(battle)).append(" spectators=").append(battle.getSpectators().size()).append(" view=").append(String.join("/", views.getOrDefault(battle, new String[0]))).append(" rounds=").append(roundsShown.getOrDefault(battle, List.of()).toString().replace(" ", ""));
 		}
 		return out.toString();
 	}

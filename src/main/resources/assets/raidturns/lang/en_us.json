@@ -4,5 +4,22 @@
   "raidturns.banned": "You fled this raid. You can return when it ends.",
   "raidturns.waiting.one": "1 player still has to choose: %s s",
   "raidturns.waiting.many": "%s players still have to choose: %s s",
-  "raidturns.seconds": "%s s"
+  "raidturns.seconds": "%s s",
+  "raidturns.log.boss_damaged": "%1$s lost %2$s%% of its health",
+  "raidturns.log.boss_healed": "%1$s regained %2$s%% of its health",
+  "raidturns.log.player_damaged": "%1$s of %2$s lost %3$s%% of its health",
+  "raidturns.log.player_healed": "%1$s of %2$s regained %3$s%% of its health",
+  "raidturns.status.brn": "BRN",
+  "raidturns.status.par": "PAR",
+  "raidturns.status.slp": "SLP",
+  "raidturns.status.frz": "FRZ",
+  "raidturns.status.psn": "PSN",
+  "raidturns.status.tox": "TOX",
+  "raidturns.stat.atk": "Atk",
+  "raidturns.stat.def": "Def",
+  "raidturns.stat.spa": "SpA",
+  "raidturns.stat.spd": "SpD",
+  "raidturns.stat.spe": "Spe",
+  "raidturns.stat.accuracy": "Acc",
+  "raidturns.stat.evasion": "Eva"
 }

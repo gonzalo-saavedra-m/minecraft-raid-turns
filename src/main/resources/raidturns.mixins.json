@@ -8,5 +8,6 @@
 		"RaidInstanceMixin", "RaidInstanceAccessor", "RaidPokemonAccessor", "RaidDamageInstructionMixin", "RaidCrystalBlockMixin",
 		"RequestResponsePacketMixin"
 	],
+	"client": ["BattleOverlayMixin", "PartyOverlayMixin"],
 	"injectors": { "defaultRequire": 1 }
 }

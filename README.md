@@ -9,10 +9,13 @@ fights their own copy of the boss at their own pace. With this mod the raid play
   player has 60 seconds to choose; after that, their first move with PP is used, or Struggle.
 - **The boss uses one move per round against the whole party**, on its place in the order.
 - **Boss status is shared.** If someone puts the boss to sleep, it sleeps for everyone with a single counter.
-- **One Pokémon per player, no switching.** A fainted player has no more turns, stays to watch and still gets the
-  rewards if the party wins.
+- **Everyone sees the same fight.** The boss's health and status are the same for the whole party, and the battle log tells
+  what teammates did and how much the boss hurt each of them.
+- **One Pokémon per player, no switching.** A fainted player has no more turns, keeps watching the fight and its log, and
+  still gets the rewards if the party wins.
 - **Fleeing takes you out.** Alone, you can start the raid again. With a party, you stay out until the raid ends.
-- **Party panel.** On the left of the screen: the timer, and each teammate's Pokémon, name and whether they already chose.
+- **Party panel.** It replaces Cobblemon's own tile on the left of the screen: the timer, the boss, and each player's Pokémon,
+  name, health, status, stat changes and whether they already chose.
 
 ## Install
 

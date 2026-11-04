@@ -23,16 +23,22 @@ import java.util.Map;
 import java.util.UUID;
 
 public class RaidTurnsClient implements ClientModInitializer {
-	// Below Cobblemon's own battle tile (BattleOverlay: y=10, 40 tall)
-	private static final int PANEL_X = 12, PANEL_Y = 56, MAX_ROW = 22, MIN_ROW = 12, RESERVED_BOTTOM = 70, PORTRAIT = 18;
+	// Takes the place of Cobblemon's own battle tile, hidden during a raid by BattleOverlayMixin
+	private static final int PANEL_X = 12, PANEL_Y = 10, PANEL_WIDTH = 156, MAX_ROW = 24, MIN_ROW = 21, RESERVED_BOTTOM = 30, PORTRAIT = 18, BAR_WIDTH = 34;
 	private static final int MENU_RETRY_TICKS = 40;
 	private static final int[] STATUS_COLORS = {0xFFFFC857, 0xFF5BD75B, 0xFF7FC8FF, 0xFF8A8A8A};
 	private static final String[] STATUS_ICONS = {"⌛", "✔", "⚔", "☠"};
+	private static final Map<String, Integer> AILMENT_COLORS = Map.of("brn", 0xFFFF9248, "par", 0xFFFFE066, "slp", 0xFFB0B0C8, "frz", 0xFF8CE0FF, "psn", 0xFFC77DFF, "tox", 0xFFC77DFF);
 
 	private static GroupStatePayload state;
 	private static long deadlineMillis;
 	private static int menuMissingTicks;
 	private static UUID lastSelected;
+
+	/** Mixins hide Cobblemon's left side of the HUD while this is true. */
+	public static boolean panelShown() {
+		return state != null && !state.members().isEmpty();
+	}
 	private static final Map<UUID, FloatingState> PORTRAITS = new HashMap<>();
 
 	@Override
@@ -84,14 +90,39 @@ public class RaidTurnsClient implements ClientModInitializer {
 		if (members.isEmpty()) return;
 		int row = Math.max(MIN_ROW, Math.min(MAX_ROW, (graphics.guiHeight() - y - RESERVED_BOTTOM) / members.size()));
 		for (var member : members) {
-			graphics.fill(PANEL_X, y, PANEL_X + 110, y + row - 2, 0x90000000);
-			int status = Math.min(member.status(), STATUS_ICONS.length - 1);
+			graphics.fill(PANEL_X, y, PANEL_X + PANEL_WIDTH, y + row - 2, 0x90000000);
+			boolean boss = member.status() == RaidRound.Status.BOSS.ordinal();
+			boolean fainted = member.status() == RaidRound.Status.FAINTED.ordinal();
 			drawPortrait(graphics, member, y, row, partialTicks);
-			int textY = y + (row - 2 - font.lineHeight) / 2 + 1;
-			int nameColor = status == RaidRound.Status.FAINTED.ordinal() ? 0xFF8A8A8A : 0xFFFFFFFF;
-			graphics.drawString(font, font.plainSubstrByWidth(member.name(), 72), PANEL_X + PORTRAIT + 4, textY, nameColor, false);
-			graphics.drawString(font, STATUS_ICONS[status], PANEL_X + 98, textY, STATUS_COLORS[status], false);
+			int textX = PANEL_X + PORTRAIT + 4;
+			String name = boss ? member.pokemon().getSpecies().getTranslatedName().getString() : member.name();
+			graphics.drawString(font, font.plainSubstrByWidth(name, PANEL_WIDTH - PORTRAIT - 18), textX, y + 1, fainted ? 0xFF8A8A8A : boss ? 0xFFFFC857 : 0xFFFFFFFF, false);
+			if (!boss) graphics.drawString(font, STATUS_ICONS[Math.min(member.status(), STATUS_ICONS.length - 1)], PANEL_X + PANEL_WIDTH - 11, y + 1, STATUS_COLORS[Math.min(member.status(), STATUS_COLORS.length - 1)], false);
+			drawDetails(graphics, font, member, textX, y + font.lineHeight + 2);
 			y += row;
+		}
+	}
+
+	/** Health bar, status and stat changes of one row. */
+	private static void drawDetails(GuiGraphics graphics, Font font, GroupStatePayload.Member member, int x, int y) {
+		int filled = Math.round(BAR_WIDTH * Math.max(0, Math.min(1, member.health())));
+		graphics.fill(x, y + 2, x + BAR_WIDTH, y + 6, 0xFF3A3A3A);
+		graphics.fill(x, y + 2, x + filled, y + 6, member.health() > 0.5f ? 0xFF5BD75B : member.health() > 0.2f ? 0xFFFFC857 : 0xFFFF6B6B);
+		x += BAR_WIDTH + 3;
+		int limit = PANEL_X + PANEL_WIDTH - 2;
+		if (!member.ailment().equals("-")) {
+			Component ailment = Component.translatable("raidturns.status." + member.ailment());
+			graphics.drawString(font, ailment, x, y, AILMENT_COLORS.getOrDefault(member.ailment(), 0xFFFFFFFF), false);
+			x += font.width(ailment) + 3;
+		}
+		if (member.boosts().equals("-")) return;
+		for (String boost : member.boosts().split(",")) {
+			String[] parts = boost.split(":");
+			int stages = Integer.parseInt(parts[1]);
+			Component text = Component.literal(String.format("%+d ", stages)).append(Component.translatable("raidturns.stat." + parts[0]));
+			if (x + font.width(text) > limit) return;
+			graphics.drawString(font, text, x, y, stages > 0 ? 0xFF7CFC8A : 0xFFFF6B6B, false);
+			x += font.width(text) + 3;
 		}
 	}
 

@@ -4,5 +4,22 @@
   "raidturns.banned": "Huiste de esta raid. Puedes volver cuando termine.",
   "raidturns.waiting.one": "Falta 1 jugador por elegir: %s s",
   "raidturns.waiting.many": "Faltan %s jugadores por elegir: %s s",
-  "raidturns.seconds": "%s s"
+  "raidturns.seconds": "%s s",
+  "raidturns.log.boss_damaged": "%1$s perdió %2$s%% de vida",
+  "raidturns.log.boss_healed": "%1$s recuperó %2$s%% de vida",
+  "raidturns.log.player_damaged": "%1$s de %2$s perdió %3$s%% de vida",
+  "raidturns.log.player_healed": "%1$s de %2$s recuperó %3$s%% de vida",
+  "raidturns.status.brn": "QUE",
+  "raidturns.status.par": "PAR",
+  "raidturns.status.slp": "DOR",
+  "raidturns.status.frz": "CON",
+  "raidturns.status.psn": "ENV",
+  "raidturns.status.tox": "TOX",
+  "raidturns.stat.atk": "Atq",
+  "raidturns.stat.def": "Def",
+  "raidturns.stat.spa": "AtE",
+  "raidturns.stat.spd": "DeE",
+  "raidturns.stat.spe": "Vel",
+  "raidturns.stat.accuracy": "Pre",
+  "raidturns.stat.evasion": "Eva"
 }

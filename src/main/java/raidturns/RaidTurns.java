@@ -29,6 +29,11 @@ public class RaidTurns implements ModInitializer {
 			RaidRound.onSpeeds(battle, parse(message, 0), parse(message, 1));
 			return (InterpreterInstruction) ignored -> {};
 		});
+		// |rtview|<player's status>|<player's boosts>|<boss's boosts>: what the panel shows, since no copy tells the client about boosts
+		ShowdownInterpreter.registerUpdateInstructionParser("rtview", (battle, instructionSet, message, messages) -> {
+			RaidRound.onView(battle, message.argumentAt(0), message.argumentAt(1), message.argumentAt(2));
+			return (InterpreterInstruction) ignored -> {};
+		});
 		DebugCommands.register();
 	}
 

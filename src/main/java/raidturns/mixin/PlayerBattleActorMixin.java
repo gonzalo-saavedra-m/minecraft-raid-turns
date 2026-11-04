@@ -16,6 +16,11 @@ public abstract class PlayerBattleActorMixin {
 	/** The move menu only opens when the round asks everyone to choose, and the boss health bar only shows the raid's health. */
 	@Inject(method = "sendUpdate", at = @At("HEAD"), cancellable = true)
 	private void raidturns$hideInternalRequests(NetworkPacket<?> packet, CallbackInfo ci) {
+		if (packet instanceof BattleHealthChangePacket health && health.getPnx().startsWith("p1")) {
+			RaidRound round = RaidRound.of(((PlayerBattleActor) (Object) this).getBattle());
+			if (round != null) round.onPlayerHealth(((PlayerBattleActor) (Object) this).getBattle(), health.getNewHealth());
+			return;
+		}
 		boolean menu = packet instanceof BattleMakeChoicePacket || packet instanceof BattleQueueRequestPacket;
 		boolean bossHealth = packet instanceof BattleHealthChangePacket health && health.getPnx().startsWith("p2");
 		if (!menu && !bossHealth) return;

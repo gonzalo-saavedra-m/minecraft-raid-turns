@@ -16,7 +16,8 @@ public record GroupStatePayload(int phase, int seconds, List<Member> members) im
 	public static final Type<GroupStatePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath("raidturns", "group_state"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, GroupStatePayload> CODEC = StreamCodec.of(GroupStatePayload::write, GroupStatePayload::read);
 
-	public record Member(UUID id, String name, RenderablePokemon pokemon, int status) {}
+	/** ailment is a Showdown status id or "-"; boosts is "atk:2,spe:-1" or "-". The boss's name is left empty: the client translates its species. */
+	public record Member(UUID id, String name, RenderablePokemon pokemon, int status, float health, String ailment, String boosts) {}
 
 	private static void write(RegistryFriendlyByteBuf buf, GroupStatePayload state) {
 		buf.writeVarInt(state.phase);
@@ -27,6 +28,9 @@ public record GroupStatePayload(int phase, int seconds, List<Member> members) im
 			buf.writeUtf(member.name);
 			member.pokemon.saveToBuffer(buf);
 			buf.writeVarInt(member.status);
+			buf.writeFloat(member.health);
+			buf.writeUtf(member.ailment);
+			buf.writeUtf(member.boosts);
 		}
 	}
 
@@ -34,7 +38,7 @@ public record GroupStatePayload(int phase, int seconds, List<Member> members) im
 		int phase = buf.readVarInt(), seconds = buf.readVarInt(), size = buf.readVarInt();
 		List<Member> members = new ArrayList<>();
 		for (int i = 0; i < size; i++)
-			members.add(new Member(buf.readUUID(), buf.readUtf(), RenderablePokemon.Companion.loadFromBuffer(buf), buf.readVarInt()));
+			members.add(new Member(buf.readUUID(), buf.readUtf(), RenderablePokemon.Companion.loadFromBuffer(buf), buf.readVarInt(), buf.readFloat(), buf.readUtf(), buf.readUtf()));
 		return new GroupStatePayload(phase, seconds, members);
 	}
 
