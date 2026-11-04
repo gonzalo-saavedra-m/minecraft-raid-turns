@@ -67,6 +67,10 @@ final class DebugCommands {
 					RaidHelper.REWARD_QUEUE.clear();
 					return reply(c.getSource(), "rewards cleared");
 				})).executes(c -> reply(c.getSource(), "rewards " + RaidHelper.REWARD_QUEUE.keySet() + " active=" + RaidHelper.ACTIVE_RAIDS.size())))
+				.then(literal("menu").then(argument("player", EntityArgument.player()).executes(c -> {
+					RaidRound.onMenuRequest(EntityArgument.getPlayer(c, "player"));
+					return reply(c.getSource(), "menu asked");
+				})))
 				.then(literal("state").executes(c -> reply(c.getSource(), state())))));
 	}
 

@@ -13,6 +13,8 @@ import com.cobblemon.mod.common.battles.MoveActionResponse;
 import com.cobblemon.mod.common.battles.ShowdownActionResponse;
 import com.cobblemon.mod.common.battles.actor.PlayerBattleActor;
 import com.cobblemon.mod.common.entity.pokemon.PokemonEntity;
+import com.cobblemon.mod.common.net.messages.client.battle.BattleMakeChoicePacket;
+import com.cobblemon.mod.common.net.messages.client.battle.BattleQueueRequestPacket;
 import com.cobblemon.mod.common.pokemon.Pokemon;
 import com.cobblemon.mod.common.pokemon.RenderablePokemon;
 import com.cobblemon.mod.common.util.PlayerExtensionsKt;
@@ -45,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Runs one raid as a single turn-based fight over Raid Dens' separate battles (one per player against a copy of the
  * boss). Each round every copy plays two Showdown turns: the one where its player acts and the one where the boss acts,
- * with the other side held by the raidturnshold condition. The player only sees the request after the second one.
+ * with the other side held by the raidturnshold condition. The player only sees a move menu when the round asks for it.
  */
 public final class RaidRound {
 	static final int COUNTDOWN_SECONDS = 5, CHOOSE_TICKS = 60 * 20, STEP_TIMEOUT_TICKS = 30 * 20, SPEED_TIMEOUT_TICKS = 2 * 20;
@@ -73,14 +75,14 @@ public final class RaidRound {
 	private final Map<UUID, String> names = new HashMap<>();
 	private final Map<PokemonBattle, List<ShowdownActionResponse>> choices = new HashMap<>();
 	private final Map<PokemonBattle, Integer> turnsDone = new HashMap<>();
-	private final Set<PokemonBattle> internal = ConcurrentHashMap.newKeySet();
 	private final Map<PokemonBattle, int[]> speeds = new ConcurrentHashMap<>();
 	private final Set<PokemonBattle> stepWaiting = new HashSet<>();
 	private final List<Step> steps = new ArrayList<>();
 
 	private Phase phase = Phase.COUNTDOWN;
 	private int ticks;
-	private boolean started, bossSlept, bossPhase, allowDispatch;
+	private boolean started, bossSlept, bossPhase, allowDispatch, sendingMenu, showingBossHealth;
+	private int menusSent, bossHealthHidden, bossHealthSent;
 	private PokemonBattle actingBattle, bossPhaseFirst;
 	private ShowdownActionResponse bossMove;
 	private String lastState = "", lastOrder = "";
@@ -217,6 +219,10 @@ public final class RaidRound {
 		turnsDone.clear();
 		speeds.clear();
 		begin(Phase.CHOOSING);
+		for (PokemonBattle battle : live) {
+			((raidturns.mixin.RaidInstanceAccessor) raid).raidturns$sendHealth(battle);
+			if (player(battle).getResponses().isEmpty()) sendMenu(battle);
+		}
 	}
 
 	private void tickChoosing() {
@@ -300,9 +306,6 @@ public final class RaidRound {
 	/** Plays one Showdown turn of a copy: the player's choice and the boss held, or the boss's move and the player held. */
 	private void run(PokemonBattle battle, boolean playerActs) {
 		int done = turnsDone.merge(battle, 1, Integer::sum);
-		// The request after the copy's first turn of the round is answered here; the one after the second goes to the client
-		if (done == 1) internal.add(battle);
-		else internal.remove(battle);
 		BattleActor player = player(battle), boss = boss(battle);
 		battle.writeShowdownAction(">eval " + prelude(playerActs ? 1 : 0, done == 2));
 		allowDispatch = true;
@@ -403,9 +406,44 @@ public final class RaidRound {
 		}
 	}
 
-	/** Mixin on PlayerBattleActor.sendUpdate: true hides requests of a turn the server answers by itself. */
-	public boolean isInternal(PokemonBattle battle) {
-		return internal.contains(battle);
+	/**
+	 * Mixin on PlayerBattleActor.sendUpdate: the move menu opens only through sendMenu. Cobblemon ignores a choice while the
+	 * server's mustChoose is false, and its request reaches the client before that, so an early choice would be lost.
+	 */
+	public boolean hidesMenu() {
+		return !sendingMenu;
+	}
+
+	public boolean hidesBossHealth() {
+		bossHealthHidden += showingBossHealth ? 0 : 1;
+		return !showingBossHealth;
+	}
+
+	public void showBossHealth(boolean showing) {
+		showingBossHealth = showing;
+		if (showing) bossHealthSent++;
+	}
+
+	private void sendMenu(PokemonBattle battle) {
+		BattleActor actor = player(battle);
+		if (actor.getRequest() == null) return;
+		actor.setMustChoose(true);
+		sendingMenu = true;
+		try {
+			actor.sendUpdate(new BattleQueueRequestPacket(actor.getRequest()));
+			actor.sendUpdate(new BattleMakeChoicePacket());
+			menusSent++;
+		} finally {
+			sendingMenu = false;
+		}
+	}
+
+	/** A client whose panel says it is missing but has no menu asks for it again. */
+	static void onMenuRequest(ServerPlayer player) {
+		var battle = com.cobblemon.mod.common.battles.BattleRegistry.getBattleByParticipatingPlayer(player);
+		RaidRound round = battle == null ? null : of(battle);
+		if (round != null && round.phase == Phase.CHOOSING && round.raid.getBattles().contains(battle) && player(battle).getResponses().isEmpty())
+			round.sendMenu(battle);
 	}
 
 	/** Mixin on the sync of battle state: in the boss's turn each copy runs the move, so copying it would apply it twice. */
@@ -480,11 +518,11 @@ public final class RaidRound {
 
 	/** State of the round for /raidturns state. */
 	String describe() {
-		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " order=" + lastOrder + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
+		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " menus=" + menusSent + " healthSent=" + bossHealthSent + " healthHidden=" + bossHealthHidden + " order=" + lastOrder + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
 		for (PokemonBattle battle : live()) {
 			BattleActor actor = player(battle);
 			out.append(" | ").append(actor.getName().getString()).append(" must=").append(actor.getMustChoose())
-					.append(" resp=").append(actor.getResponses().size()).append(" internal=").append(isInternal(battle))
+					.append(" resp=").append(actor.getResponses().size())
 					.append(" team=").append(actor.getPokemonList().size()).append(" turn=").append(battle.getTurn());
 		}
 		return out.toString();

@@ -20,7 +20,7 @@ before sleep counts down. End-of-turn effects are switched off with `>eval` exce
 | `RaidTurnsClient.java` | Sends the selected Pokémon and draws the party panel |
 | `DebugCommands.java` | `/raidturns …` for fake players; only exists if a file named `raidturns-debug` is in the game folder |
 | `mixin/PokemonBattleMixin` | Holds `checkForInputDispatch` until the round allows it |
-| `mixin/PlayerBattleActorMixin` | Hides the requests of turns the server answers by itself |
+| `mixin/PlayerBattleActorMixin` | Hides every move request; `RaidRound.sendMenu` sends them when it is time to choose |
 | `mixin/RaidInstanceMixin` | Always sync; no state copies in the boss's turn; one heal; one life |
 | `tools/test-raid.sh` | End-to-end test with Carpet's fake players; the definition of "works" |
 
@@ -28,7 +28,8 @@ before sleep counts down. End-of-turn effects are switched off with `>eval` exce
 
 1. **Cobblemon dispatches only when no actor has `mustChoose` and the dispatch queue is empty.** Set both responses and
    `mustChoose = false` before calling `checkForInputDispatch`, and wait for `ready()` before the next step.
-2. **The client only sees the request after a copy's second turn.** Otherwise the move menu opens mid-round.
+2. **The move menu only opens through `sendMenu`, when CHOOSING starts.** Cobblemon drops a choice while the server's
+   `mustChoose` is false, and its own request reaches the client earlier: an early choice would be lost.
 3. **Mixins target private names of Raid Dens 0.13.2** (`lambda$updateBattleState$25`, for one). `fabric.mod.json` pins
    the exact version; re-check them all on any upgrade.
 4. Player-facing text follows the translation files. Keep it short and concrete, without emojis.

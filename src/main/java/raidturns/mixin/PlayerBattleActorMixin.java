@@ -2,6 +2,7 @@ package raidturns.mixin;
 
 import com.cobblemon.mod.common.api.net.NetworkPacket;
 import com.cobblemon.mod.common.battles.actor.PlayerBattleActor;
+import com.cobblemon.mod.common.net.messages.client.battle.BattleHealthChangePacket;
 import com.cobblemon.mod.common.net.messages.client.battle.BattleMakeChoicePacket;
 import com.cobblemon.mod.common.net.messages.client.battle.BattleQueueRequestPacket;
 import org.spongepowered.asm.mixin.Mixin;
@@ -12,12 +13,14 @@ import raidturns.RaidRound;
 
 @Mixin(value = PlayerBattleActor.class, remap = false)
 public abstract class PlayerBattleActorMixin {
-	/** The turns the server answers by itself must not open the move menu. */
+	/** The move menu only opens when the round asks everyone to choose, and the boss health bar only shows the raid's health. */
 	@Inject(method = "sendUpdate", at = @At("HEAD"), cancellable = true)
 	private void raidturns$hideInternalRequests(NetworkPacket<?> packet, CallbackInfo ci) {
-		if (!(packet instanceof BattleMakeChoicePacket || packet instanceof BattleQueueRequestPacket)) return;
+		boolean menu = packet instanceof BattleMakeChoicePacket || packet instanceof BattleQueueRequestPacket;
+		boolean bossHealth = packet instanceof BattleHealthChangePacket health && health.getPnx().startsWith("p2");
+		if (!menu && !bossHealth) return;
 		var battle = ((PlayerBattleActor) (Object) this).getBattle();
 		RaidRound round = RaidRound.of(battle);
-		if (round != null && round.isInternal(battle)) ci.cancel();
+		if (round != null && (menu ? round.hidesMenu() : round.hidesBossHealth())) ci.cancel();
 	}
 }

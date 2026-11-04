@@ -5,7 +5,7 @@
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
 		"PokemonBattleMixin", "PlayerBattleActorMixin", "RaidChallengePacketMixin", "RaidBuilderMixin",
-		"RaidInstanceMixin", "RaidPokemonAccessor", "RaidDamageInstructionMixin", "RaidCrystalBlockMixin",
+		"RaidInstanceMixin", "RaidInstanceAccessor", "RaidPokemonAccessor", "RaidDamageInstructionMixin", "RaidCrystalBlockMixin",
 		"RequestResponsePacketMixin"
 	],
 	"injectors": { "defaultRequire": 1 }

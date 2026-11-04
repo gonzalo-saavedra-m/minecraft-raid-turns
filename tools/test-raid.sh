@@ -49,12 +49,23 @@ check "closed during countdown" "$(expected_blocked rtD)" "blocked raidturns.clo
 wait_state "CHOOSING" 12
 s=$(state)
 check "everyone starts when one presses R" "$s" "RTA.*team=1.*"
-check "one Pokémon per player (rtA has two)" "$s" "(RTA|rtA) must=true resp=0 internal=false team=1"
+check "one Pokémon per player (rtA has two)" "$s" "rtA must=true resp=0 team=1"
 check "three copies" "$s" "rtc must"
+check "one menu per player when choosing starts" "$(state)" "menus=3 "
 c "mrtest act rtA default"; c "mrtest act rtB default"; sleep 2
 check "round waits for the last one" "$(state)" "CHOOSING"
-c "mrtest act rtC default"
+c "raidturns menu rtA" 0.5
+check "someone who chose gets no new menu" "$(state)" "menus=3 "
+c "raidturns menu rtC" 0.5
+check "someone missing gets the menu again" "$(state)" "menus=4 "
+c "mrtest act rtC default"; sleep 1
+check "no menus while the moves run" "$(state)" "menus=4 "
 wait_state "turn=3.*turn=3.*turn=3" 40 && echo "PASS round resolves when all chose"
+wait_state "CHOOSING" 20
+check "next round opens the menus again" "$(state)" "menus=7 "
+s=$(state)
+check "the boss bar gets the raid's health" "$s" "healthSent=[1-9]"
+check "the copy's full health is hidden" "$s" "healthHidden=[1-9]"
 check "same boss move in all copies" "$(log rtA)" "\|move\|p2a"
 a=$(log rtA | grep -Eo '\|move\|p2a: #\|[^|]+' | head -1); b=$(log rtB | grep -Eo '\|move\|p2a: #\|[^|]+' | head -1)
 [ -n "$a" ] && [ "$a" = "$b" ] && echo "PASS boss used $a in both" || echo "FAIL boss moves differ: $a / $b"
@@ -73,6 +84,7 @@ c "mrtest act rtA default"; c "mrtest act rtB default"; c "mrtest act rtC defaul
 wait_state "turn=5.*turn=5.*turn=5" 40
 n=$(log rtA | grep -o 'from. brn' | wc -l | tr -d ' ')
 [ "$n" -le 2 ] && [ "$n" -ge 1 ] && echo "PASS burn once per round ($n lines: absolute and percent)" || echo "FAIL burn lines $n"
+wait_state "CHOOSING" 20
 c "raidturns eval rtA battle.sides[1].active[0].setStatus('slp')" 2
 for p in rtA rtB rtC; do c "raidturns eval $p battle.sides[1].active[0].status + '=' + battle.sides[1].active[0].statusState.time" 1; done
 c "mrtest act rtA default"; c "mrtest act rtB default"; c "mrtest act rtC default"

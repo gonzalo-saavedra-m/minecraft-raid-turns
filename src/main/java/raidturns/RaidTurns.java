@@ -18,6 +18,8 @@ public class RaidTurns implements ModInitializer {
 	public void onInitialize() {
 		PayloadTypeRegistry.playC2S().register(SelectedPokemonPayload.TYPE, SelectedPokemonPayload.CODEC);
 		PayloadTypeRegistry.playS2C().register(GroupStatePayload.TYPE, GroupStatePayload.CODEC);
+		PayloadTypeRegistry.playC2S().register(RequestMenuPayload.TYPE, RequestMenuPayload.CODEC);
+		ServerPlayNetworking.registerGlobalReceiver(RequestMenuPayload.TYPE, (payload, context) -> RaidRound.onMenuRequest(context.player()));
 		ServerPlayNetworking.registerGlobalReceiver(SelectedPokemonPayload.TYPE,
 				(payload, context) -> RaidRound.SELECTED.put(context.player().getUUID(), payload.pokemon()));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> RaidRound.SELECTED.remove(handler.getPlayer().getUUID()));

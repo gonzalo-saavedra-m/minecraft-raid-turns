@@ -25,11 +25,13 @@ import java.util.UUID;
 public class RaidTurnsClient implements ClientModInitializer {
 	// Below Cobblemon's own battle tile (BattleOverlay: y=10, 40 tall)
 	private static final int PANEL_X = 12, PANEL_Y = 56, MAX_ROW = 22, MIN_ROW = 12, RESERVED_BOTTOM = 70, PORTRAIT = 18;
+	private static final int MENU_RETRY_TICKS = 40;
 	private static final int[] STATUS_COLORS = {0xFFFFC857, 0xFF5BD75B, 0xFF7FC8FF, 0xFF8A8A8A};
 	private static final String[] STATUS_ICONS = {"⌛", "✔", "⚔", "☠"};
 
 	private static GroupStatePayload state;
 	private static long deadlineMillis;
+	private static int menuMissingTicks;
 	private static UUID lastSelected;
 	private static final Map<UUID, FloatingState> PORTRAITS = new HashMap<>();
 
@@ -40,6 +42,7 @@ public class RaidTurnsClient implements ClientModInitializer {
 			deadlineMillis = System.currentTimeMillis() + payload.seconds() * 1000L;
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(RaidTurnsClient::sendSelection);
+		ClientTickEvents.END_CLIENT_TICK.register(RaidTurnsClient::askForMissingMenu);
 		HudRenderCallback.EVENT.register((graphics, tick) -> render(graphics, tick.getGameTimeDeltaPartialTick(true)));
 	}
 
@@ -55,6 +58,18 @@ public class RaidTurnsClient implements ClientModInitializer {
 		lastSelected = id;
 	}
 
+	/** Missing according to the server, with no menu here: without this the player would wait for the timeout. */
+	private static void askForMissingMenu(Minecraft client) {
+		var battle = CobblemonClient.INSTANCE.getBattle();
+		boolean missing = client.player != null && battle != null && state != null && state.phase() == GroupStatePayload.CHOOSING && !battle.getMustChoose()
+				&& state.members().stream().anyMatch(member -> member.id().equals(client.player.getUUID()) && member.status() == RaidRound.Status.WAITING.ordinal());
+		menuMissingTicks = missing ? menuMissingTicks + 1 : 0;
+		if (menuMissingTicks >= MENU_RETRY_TICKS && ClientPlayNetworking.canSend(RequestMenuPayload.TYPE)) {
+			ClientPlayNetworking.send(new RequestMenuPayload());
+			menuMissingTicks = 0;
+		}
+	}
+
 	private static void render(GuiGraphics graphics, float partialTicks) {
 		Minecraft client = Minecraft.getInstance();
 		if (state == null || client.player == null || client.options.hideGui) return;
@@ -65,10 +80,10 @@ public class RaidTurnsClient implements ClientModInitializer {
 			graphics.drawString(font, Component.translatable("raidturns.seconds", left), PANEL_X, y, left <= 10 ? 0xFFFF6B6B : 0xFFFFFFFF, true);
 			y += font.lineHeight + 3;
 		}
-		var others = state.members().stream().filter(member -> !member.id().equals(client.player.getUUID())).toList();
-		if (others.isEmpty()) return;
-		int row = Math.max(MIN_ROW, Math.min(MAX_ROW, (graphics.guiHeight() - y - RESERVED_BOTTOM) / others.size()));
-		for (var member : others) {
+		var members = state.members();
+		if (members.isEmpty()) return;
+		int row = Math.max(MIN_ROW, Math.min(MAX_ROW, (graphics.guiHeight() - y - RESERVED_BOTTOM) / members.size()));
+		for (var member : members) {
 			graphics.fill(PANEL_X, y, PANEL_X + 110, y + row - 2, 0x90000000);
 			int status = Math.min(member.status(), STATUS_ICONS.length - 1);
 			drawPortrait(graphics, member, y, row, partialTicks);

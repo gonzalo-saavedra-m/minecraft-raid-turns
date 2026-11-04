@@ -43,6 +43,19 @@ public abstract class RaidInstanceMixin {
 		if (round != null && (RaidRound.debugNoDamage && amount > 0 || amount < 0 && round.ignoresBossHeal(battle))) ci.cancel();
 	}
 
+	/** Only the raid's own health reaches the boss bar: each copy's Showdown still reports the copy at full health. */
+	@Inject(method = "sendHealthPacket", at = @At("HEAD"))
+	private void raidturns$healthStart(PokemonBattle battle, CallbackInfo ci) {
+		RaidRound round = raidturns$round();
+		if (round != null) round.showBossHealth(true);
+	}
+
+	@Inject(method = "sendHealthPacket", at = @At("RETURN"))
+	private void raidturns$healthEnd(PokemonBattle battle, CallbackInfo ci) {
+		RaidRound round = raidturns$round();
+		if (round != null) round.showBossHealth(false);
+	}
+
 	/** One Pokémon per player and no entries once started: lives above 1 would leave a player out but not failed. */
 	@Inject(method = "loseLife", at = @At("HEAD"), cancellable = true)
 	private void raidturns$oneLife(java.util.UUID player, CallbackInfoReturnable<Boolean> cir) {
