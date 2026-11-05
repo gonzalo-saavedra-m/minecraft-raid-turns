@@ -14,8 +14,9 @@ fights their own copy of the boss at their own pace. With this mod the raid play
 - **One Pokémon per player, no switching.** A fainted player has no more turns, keeps watching the fight and its log, and
   still gets the rewards if the party wins.
 - **Fleeing takes you out.** Alone, you can start the raid again. With a party, you stay out until the raid ends.
+- **Disconnecting takes you out at once**, like fleeing. If everyone disconnects, the raid is lost.
 - **Party panel.** It replaces Cobblemon's own tile on the left of the screen: the timer, the boss, and each player's Pokémon,
-  name, health, status, stat changes and whether they already chose.
+  name, health, status, stat changes and whether they already chose. Rows follow the order of the last round.
 
 ## Install
 

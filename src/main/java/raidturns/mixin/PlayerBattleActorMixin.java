@@ -21,6 +21,12 @@ public abstract class PlayerBattleActorMixin {
 			if (round != null) round.onPlayerHealth(((PlayerBattleActor) (Object) this).getBattle(), health.getNewHealth());
 			return;
 		}
+		if (packet instanceof com.cobblemon.mod.common.net.messages.client.battle.BattleMessagePacket log) {
+			PlayerBattleActor actor = (PlayerBattleActor) (Object) this;
+			RaidRound round = RaidRound.of(actor.getBattle());
+			if (round != null) round.recordChat(actor.getUuid(), log.getMessages());
+			return;
+		}
 		boolean menu = packet instanceof BattleMakeChoicePacket || packet instanceof BattleQueueRequestPacket;
 		boolean bossHealth = packet instanceof BattleHealthChangePacket health && health.getPnx().startsWith("p2");
 		if (!menu && !bossHealth) return;

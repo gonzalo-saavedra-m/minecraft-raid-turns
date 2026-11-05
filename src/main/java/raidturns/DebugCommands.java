@@ -71,6 +71,15 @@ final class DebugCommands {
 					RaidRound.onMenuRequest(EntityArgument.getPlayer(c, "player"));
 					return reply(c.getSource(), "menu asked");
 				})))
+				.then(literal("quit").then(argument("player", EntityArgument.player()).executes(c -> {
+					// Carpet's "player kill" skips the connection, and with it Fabric's DISCONNECT, which is what a real player fires
+					var p = EntityArgument.getPlayer(c, "player");
+					net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.DISCONNECT.invoker().onPlayDisconnect(p.connection, p.getServer());
+					p.connection.onDisconnect(new net.minecraft.network.DisconnectionDetails(Component.literal("raidturns quit")));
+					return reply(c.getSource(), "quit");
+				})))
+				.then(literal("chat").then(argument("player", EntityArgument.player())
+						.executes(c -> reply(c.getSource(), chat(EntityArgument.getPlayer(c, "player"))))))
 				.then(literal("state").executes(c -> reply(c.getSource(), state())))));
 	}
 
@@ -139,13 +148,19 @@ final class DebugCommands {
 		if (battle == null) return "log: no battle";
 		var lines = new java.util.ArrayList<String>();
 		for (String line : battle.getShowdownMessages())
-			if (line.matches("(?s).*\\|(<<<|move|turn|cant|upkeep|-status|-curestatus|-boost|-raiddamage|-heal|-damage|faint|win)\\|?.*"))
-				for (String part : line.split("\n")) if (part.replaceFirst("^\\|\\|", "|").matches("\\|(<<<|move|turn|cant|upkeep|-status|-curestatus|-boost|-raiddamage|-heal|-damage|faint|win).*")) lines.add(part.replaceAll("[0-9a-f]{8}-[0-9a-f-]{27}", "#"));
+			if (line.matches("(?s).*\\|(<<<|move|turn|cant|upkeep|-status|-curestatus|-boost|-raiddamage|-heal|-damage|faint|win|-miss|-prepare|-singleturn|-activate|-fail|-immune)\\|?.*"))
+				for (String part : line.split("\n")) if (part.replaceFirst("^\\|\\|", "|").matches("\\|(<<<|move|turn|cant|upkeep|-status|-curestatus|-boost|-raiddamage|-heal|-damage|faint|win|-miss|-prepare|-singleturn|-activate|-fail|-immune).*")) lines.add(part.replaceAll("[0-9a-f]{8}-[0-9a-f-]{27}", "#"));
 		return "log " + player.getScoreboardName() + " " + String.join(" ", lines);
 	}
 
+	private static String chat(ServerPlayer player) {
+		var out = new StringBuilder("chat " + player.getScoreboardName());
+		RaidRound.ROUNDS.values().forEach(round -> round.chatOf(player.getUUID()).forEach(line -> out.append(" ; ").append(line.replaceAll("[0-9a-f]{8}-[0-9a-f-]{27}", "#"))));
+		return out.toString();
+	}
+
 	private static String state() {
-		if (RaidRound.ROUNDS.isEmpty()) return "state: no rounds";
+		if (RaidRound.ROUNDS.isEmpty()) return "state: no rounds last=" + RaidRound.debugLastEnd;
 		StringBuilder out = new StringBuilder("state:");
 		RaidRound.ROUNDS.values().forEach(round -> out.append(' ').append(round.describe()));
 		return out.toString();

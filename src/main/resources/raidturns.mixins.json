@@ -6,8 +6,8 @@
 	"mixins": [
 		"PokemonBattleMixin", "PlayerBattleActorMixin", "RaidChallengePacketMixin", "RaidBuilderMixin",
 		"RaidInstanceMixin", "RaidInstanceAccessor", "RaidPokemonAccessor", "RaidDamageInstructionMixin", "RaidCrystalBlockMixin",
-		"RequestResponsePacketMixin"
+		"RequestResponsePacketMixin", "RaidJoinHelperMixin"
 	],
-	"client": ["BattleOverlayMixin", "PartyOverlayMixin"],
+	"client": ["BattleOverlayMixin", "PartyOverlayMixin", "BattleExtrasStatsMixin"],
 	"injectors": { "defaultRequire": 1 }
 }

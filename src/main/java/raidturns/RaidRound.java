@@ -96,15 +96,21 @@ public final class RaidRound {
 
 	private Phase phase = Phase.COUNTDOWN;
 	private int ticks;
-	private boolean started, bossSlept, bossPhase, allowDispatch, sendingMenu, showingBossHealth, saying;
+	private boolean started, bossSlept, bossPhase, allowDispatch, sendingMenu, showingBossHealth, saying, bossResidualDone;
 	private int menusSent, bossHealthHidden, bossHealthSent, linesRelayed;
 	private PokemonBattle actingBattle, bossPhaseFirst;
 	private ShowdownActionResponse bossMove;
-	private String lastState = "", lastOrder = "";
+	private String lastState = "", lastOrder = "", lastPanel = "";
+	/** The last order the moves ran in, which the panel follows; empty until the first round is resolved. */
+	private final List<UUID> turnOrder = new ArrayList<>();
 	/** Only set by /raidturns bossmove. */
 	static String debugBossMove;
 	/** Only set by /raidturns nodamage: the raid does not end by itself during tests. */
 	public static boolean debugNoDamage;
+	/** Only read by /raidturns state: how the last raid ended. */
+	static String debugLastEnd = "none";
+	/** Only read by /raidturns chat: the log lines each player's client was sent. */
+	private final Map<UUID, List<String>> debugChat = new ConcurrentHashMap<>();
 
 	private RaidRound(UUID raidId, RaidInstance raid, int bossEntityId, BattleFormat format) {
 		this.raidId = raidId;
@@ -139,7 +145,16 @@ public final class RaidRound {
 	}
 
 	public static void tickAll(MinecraftServer server) {
-		ROUNDS.values().removeIf(round -> round.tick(server));
+		ROUNDS.values().removeIf(round -> {
+			try {
+				return round.tick(server);
+			} catch (RuntimeException e) {
+				// A raid that breaks loses its turns, not the whole server
+				RaidTurns.LOGGER.error("Raid {}: stopping turns after an error", round.raidId, e);
+				round.broadcastEnd(server);
+				return true;
+			}
+		});
 	}
 
 	/** The message that stops this player from entering the raid, or null if they can enter. */
@@ -149,10 +164,49 @@ public final class RaidRound {
 		return round.banned.contains(player) ? "raidturns.banned" : "raidturns.closed";
 	}
 
+	/** Takes a disconnected player out of a raid in progress. Returns false if no round has started for them. */
+	public static boolean onDisconnect(ServerPlayer player) {
+		var participant = RaidJoinHelper.getParticipant(player);
+		RaidRound round = participant == null ? null : ROUNDS.get(participant.raid());
+		if (round == null || !round.started) return false;
+		round.removeDisconnected(player);
+		return true;
+	}
+
+	private void removeDisconnected(ServerPlayer player) {
+		UUID id = player.getUUID();
+		PokemonBattle battle = null;
+		for (PokemonBattle candidate : raid.getBattles())
+			if (player(candidate) instanceof PlayerBattleActor actor && id.equals(actor.getUuid())) battle = candidate;
+		leaving.remove(id);
+		banned.add(id);
+		pokemon.remove(id);
+		leads.remove(id);
+		names.remove(id);
+		// Stops the raid as lost if this was the last one who hadn't failed
+		raid.removePlayer(player, battle, true);
+		raid.getPlayers().remove(player);
+		raid.removeFromBossEvent(player);
+		RaidJoinHelper.removeParticipant(player);
+		if (raid.getPlayers().isEmpty() && !raid.isFinished()) raid.stopRaid(false);
+	}
+
+	public static void dropParticipant(ServerPlayer player) {
+		var participant = RaidJoinHelper.getParticipant(player);
+		if (participant == null) return;
+		RaidInstance raid = RaidHelper.ACTIVE_RAIDS.get(participant.raid());
+		if (raid != null) {
+			raid.getPlayers().remove(player);
+			raid.removeFromBossEvent(player);
+		}
+		RaidJoinHelper.removeParticipant(player);
+	}
+
 	private boolean tick(MinecraftServer server) {
 		handleLeaving(server);
 		if (raid.isFinished() || RaidHelper.ACTIVE_RAIDS.get(raidId) != raid) {
 			if (!leaving.isEmpty()) return false;
+			debugLastEnd = raid.getRaidState().name();
 			broadcastEnd(server);
 			return true;
 		}
@@ -275,6 +329,7 @@ public final class RaidRound {
 		if (!speeds.keySet().containsAll(live) && ticks < SPEED_TIMEOUT_TICKS) return;
 		PokemonBattle first = live.getFirst();
 		bossMove = boss(first).getResponses().isEmpty() ? new DefaultActionResponse() : boss(first).getResponses().getFirst();
+		bossResidualDone = false;
 		steps.clear();
 		steps.add(new Step(null, priorityOf(bossMove), speeds.getOrDefault(first, new int[2])[1]));
 		for (PokemonBattle battle : live) {
@@ -283,6 +338,11 @@ public final class RaidRound {
 		}
 		steps.sort(Comparator.comparingInt(Step::priority).thenComparingInt(Step::speed).reversed());
 		if (debugBossMove != null) bossMove = new MoveActionResponse(debugBossMove, null, null);
+		turnOrder.clear();
+		for (Step step : steps) {
+			if (step.battle() == null) turnOrder.add(raid.getBossEntity().getUUID());
+			else if (player(step.battle()) instanceof PlayerBattleActor actor) turnOrder.add(actor.getUuid());
+		}
 		lastOrder = steps.stream().map(step -> (step.battle() == null ? "boss" : player(step.battle()).getName().getString()) + ":" + step.priority() + ":" + step.speed()).toList().toString();
 		nextStep();
 	}
@@ -369,6 +429,19 @@ public final class RaidRound {
 		say(health < last ? "raidturns.log.player_damaged" : "raidturns.log.player_healed", lead(battle).getName(), owner(battle), percent(Math.abs(last - health), pokemon.getMaxHealth()));
 	}
 
+	/** Mixins on the packets that carry log lines. Bounded, since it runs on the real server too. */
+	public void recordChat(UUID player, List<Component> messages) {
+		List<String> lines = debugChat.computeIfAbsent(player, ignored -> new ArrayList<>());
+		for (Component message : messages) {
+			if (lines.size() >= 200) lines.removeFirst();
+			lines.add(message.getContents() instanceof TranslatableContents contents ? contents.getKey() + java.util.Arrays.stream(contents.getArgs()).map(arg -> arg instanceof Component c ? c.getString() : String.valueOf(arg)).toList() : message.getString());
+		}
+	}
+
+	List<String> chatOf(UUID player) {
+		return debugChat.getOrDefault(player, List.of());
+	}
+
 	private void say(String key, Object... args) {
 		Component line = Component.translatable(key, args);
 		saying = true;
@@ -450,7 +523,10 @@ public final class RaidRound {
 	private void run(PokemonBattle battle, boolean playerActs) {
 		int done = turnsDone.merge(battle, 1, Integer::sum);
 		BattleActor player = player(battle), boss = boss(battle);
-		battle.writeShowdownAction(">eval " + prelude(playerActs ? 1 : 0, done == 2));
+		// Every copy ends the round with the boss's poison or Leftovers: only the first one counts, like in a single battle
+		boolean bossResidual = done == 2 && !bossResidualDone;
+		bossResidualDone |= bossResidual;
+		battle.writeShowdownAction(">eval " + prelude(playerActs ? 1 : 0, done == 2, bossResidual));
 		allowDispatch = true;
 		try {
 			// Cobblemon dispatches once no actor has mustChoose left
@@ -460,8 +536,12 @@ public final class RaidRound {
 			if (!choice.isEmpty() && done == 2) {
 				// Validated against the new request: the boss may have disabled the chosen move
 				player.getResponses().clear();
-				player.setActionResponses(new ArrayList<>(choice));
-				if (!player.getMustChoose()) return;
+				try {
+					player.setActionResponses(new ArrayList<>(choice));
+					if (!player.getMustChoose()) return;
+				} catch (com.cobblemon.mod.common.exception.IllegalActionChoiceException ignored) {
+					// Throws rather than returning: the move is disabled, or the request changed since they chose
+				}
 				choice = List.of();
 			}
 			player.setResponses(new ArrayList<>(choice.isEmpty() ? List.of(new DefaultActionResponse()) : choice));
@@ -482,10 +562,12 @@ public final class RaidRound {
 	}
 
 	/** Holds one side and leaves end-of-turn effects for the copy's last turn, so they count once per round. */
-	private static String prelude(int heldSide, boolean lastTurn) {
+	private static String prelude(int heldSide, boolean lastTurn, boolean bossResidual) {
 		return "for (const s of battle.sides) { const p = s.active[0]; if (p) { p.removeVolatile('" + HOLD + "'); p.moveLastTurnResult = true; } } "
 				+ "battle.sides[" + heldSide + "].active[0].addVolatile('" + HOLD + "'); "
-				+ (lastTurn ? "delete battle.residualEvent;" : "battle.residualEvent = function () {};");
+				+ (!lastTurn ? "battle.residualEvent = function () {};"
+				: bossResidual ? "delete battle.residualEvent;"
+				: "battle.residualEvent = function (id, relay) { const b = this.sides[1].active[0]; if (b) b.addVolatile('raidturnsquiet'); Object.getPrototypeOf(this).residualEvent.call(this, id, relay); if (b) b.removeVolatile('raidturnsquiet'); };");
 	}
 
 	private void tickStep() {
@@ -626,6 +708,9 @@ public final class RaidRound {
 			members.addFirst(new GroupStatePayload.Member(raid.getBossEntity().getUUID(), "", raid.getBossEntity().getPokemon().asRenderablePokemon(), Status.BOSS.ordinal(),
 					raid.getCurrentHealth() / raid.getMaxHealth(), ailment == null ? "-" : ailment.getShowdownName(), bossView == null ? "-" : bossView[2]));
 		}
+		// Whoever has no place in the order (fainted, or the first round) goes last, and the sort keeps the boss on top of those
+		members.sort(Comparator.comparingInt(member -> turnOrder.contains(member.id()) ? turnOrder.indexOf(member.id()) : Integer.MAX_VALUE));
+		lastPanel = members.stream().map(member -> member.status() == Status.BOSS.ordinal() ? "boss" : member.name()).toList().toString();
 		int seconds = phase == Phase.CHOOSING ? Math.max(0, (CHOOSE_TICKS - ticks + 19) / 20) : 0;
 		StringBuilder key = new StringBuilder().append(phaseId);
 		for (var member : members) key.append(member.id()).append(member.status()).append(Math.round(member.health() * 100)).append(member.ailment()).append(member.boosts());
@@ -672,7 +757,7 @@ public final class RaidRound {
 
 	/** State of the round for /raidturns state. */
 	String describe() {
-		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " menus=" + menusSent + " healthSent=" + bossHealthSent + " healthHidden=" + bossHealthHidden + " relayed=" + linesRelayed + " bossLog=" + recentLog + " health=" + raid.getCurrentHealth() + "/" + raid.getMaxHealth() + " order=" + lastOrder + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
+		StringBuilder out = new StringBuilder(phase + " ticks=" + ticks + " started=" + started + " bossPhase=" + bossPhase + " banned=" + banned.size() + " menus=" + menusSent + " healthSent=" + bossHealthSent + " healthHidden=" + bossHealthHidden + " relayed=" + linesRelayed + " bossLog=" + recentLog + " health=" + raid.getCurrentHealth() + "/" + raid.getMaxHealth() + " order=" + lastOrder + " panel=" + lastPanel + " players=" + raid.getPlayers().size() + " state=" + lastState.replaceAll("[0-9a-f-]{36}", ":"));
 		for (PokemonBattle battle : live()) {
 			BattleActor actor = player(battle);
 			out.append(" | ").append(actor.getName().getString()).append(" must=").append(actor.getMustChoose())

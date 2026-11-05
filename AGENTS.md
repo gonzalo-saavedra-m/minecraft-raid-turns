@@ -11,7 +11,8 @@ Raid Dens keeps one `PokemonBattle` per player against a copy of the boss, shari
 
 Each round every copy plays **two Showdown turns**: one where its player acts and one where the boss acts. The other side
 of each turn is held by the `raidturnshold` condition, whose `onBeforeMove` returns false before PP is deducted and
-before sleep counts down. End-of-turn effects are switched off with `>eval` except on the copy's last turn of the round.
+before sleep counts down. It also runs the held side last and keeps volatiles that `MoveAborted` would clear, so
+Protect, Sucker Punch and two-turn moves work. End-of-turn effects are switched off with `>eval` except on the copy's last turn of the round.
 
 | File | What it is |
 |---|---|
@@ -20,6 +21,8 @@ before sleep counts down. End-of-turn effects are switched off with `>eval` exce
 | `RaidTurnsClient.java` | Sends the selected Pokémon and draws the party panel: health, status and stat changes of the boss and each player |
 | `mixin/BattleOverlayMixin`, `mixin/PartyOverlayMixin` | Client only: hide what Cobblemon draws on the left while the panel is shown |
 | `DebugCommands.java` | `/raidturns …` for fake players; only exists if a file named `raidturns-debug` is in the game folder |
+| `mixin/RaidJoinHelperMixin` | Disconnecting leaves the raid right away; if nobody is left, the raid is lost |
+| `mixin/BattleExtrasStatsMixin` | Client only: hides Battle Extras' stat strip, which covers the panel |
 | `mixin/PokemonBattleMixin` | Holds `checkForInputDispatch` until the round allows it |
 | `mixin/PlayerBattleActorMixin` | Hides every move request; `RaidRound.sendMenu` sends them when it is time to choose |
 | `mixin/RaidInstanceMixin` | Always sync; no state copies in the boss's turn; one heal; one life; shows a hit when it lands |
@@ -42,5 +45,7 @@ before sleep counts down. End-of-turn effects are switched off with `>eval` exce
 ## Test
 
 On a server with this mod, Carpet, `mipack-testkit` and the `raidturns-debug` file: `tools/test-raid.sh <server folder>`.
+Add group names to run only those: `twoturn protect priority robust rejected disconnect log`, or `moves` for all of them.
+`extra` repeats those cases with other moves that take the same path; run it, or the whole script, before publishing.
 Fake players can't show the client side: the move menu, animations, the selected Pokémon packet and the panel need a real
 client.
